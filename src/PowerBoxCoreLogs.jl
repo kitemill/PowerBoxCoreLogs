@@ -1,7 +1,7 @@
 module PowerBoxCoreLogs
 
 export powerbox_read, list, lookup, powerbox_expand_file_series,
-@powerbox_to_struct
+to_dataframe, @powerbox_to_struct
 
 
 using DataFrames
@@ -185,22 +185,52 @@ function string_to_struct_safe(s::String)::String
   s5
 end
 
+function to_dataframe(powerbox::Dict{FieldId, FieldAndData}; missing_value = missing)::DataFrame
+
+  function retime(time, data, new_time)
+    dt = length(time) >= 2 ? maximum(diff(time)) : 0
+    tmp::Vector{Any} = fill(missing, size(new_time))
+    j = 1
+    for i = 1:length(new_time)
+      if j > length(time)
+        if (i > 1) && new_time[i] <= time[end] + dt
+          tmp[i] = tmp[i - 1]
+        end
+      elseif new_time[i] >= time[j]
+        tmp[i] = data[j]
+        j = j + 1
+      elseif i > 1
+        tmp[i] = tmp[i - 1]
+      end
+    end
+    tmp
+  end
+
+  namer = d -> "$(string_to_struct_safe(d.field.name))__$(string_to_struct_safe(d.field.item_name))"
+  somedatas = sort([v for (_, v) = powerbox if !isnothing(v.data)], by = namer)
+  times = sort(collect(reduce((acc1, x) -> reduce((acc2, y) -> push!(acc1, y), x.data._time, init = acc1), somedatas, init = Set{Int64}())))
+  name_and_retimed = [(namer(d), retime(d.data._time, d.data.v, times)) for d = somedatas]
+  DataFrame(["_time" => times, [n => r for (n, r) = name_and_retimed]...])
+end
+
 
 macro powerbox_to_struct(filename0, timezone = TimeZone("Europe/Oslo", TimeZones.Class(:LEGACY)))
   f_d = powerbox_read(filename0, limit = 100)
 
-  sensors = unique(sort([x.field.name for x = values(f_d)]))
+  sensors = unique(sort([k.sensor for (k, _) = f_d]))
   sensor_struct_names = Dict([(s, Symbol("_PowerBoxToStruct_$(string(UUIDs.uuid1())[(end-7):end])")) for s = sensors])
+  sensor_names = Dict([(k.sensor, v.field.name) for (k, v) = f_d]) # trick, multiple keys overwritten in Dict
+  make_items = sensor -> [k.item for (k, v) = f_d if k.sensor == sensor && !isnothing(v.data) && length(v.data.v) > 0]
 
-  function make_sensor_struct(sensor_name)
-    items = Iterators.filter(x -> x.field.name == sensor_name, values(f_d))
+  function make_sensor_struct(sensor)
+    items = make_items(sensor)
 
     esc(quote
-          struct $(Symbol(sensor_struct_names[sensor_name]))
-            $(map(x -> Symbol(string_to_struct_safe(x.field.item_name)), items)...)
+          struct $(Symbol(sensor_struct_names[sensor]))
+            $([Symbol(string_to_struct_safe(f_d[FieldId(sensor, i)].field.item_name)) for i = items]...)
           end
 
-          Base.show(io::IO, powerbox::$(Symbol(sensor_struct_names[sensor_name]))) = print(io, "[PowerBox Sensor] $(join(fieldnames(typeof(powerbox)), ", "))")
+          Base.show(io::IO, powerbox::$(sensor_struct_names[sensor])) = print(io, "[PowerBox Sensor] $(join(fieldnames(typeof(powerbox)), ", "))")
         end)
   end
   
@@ -208,7 +238,8 @@ macro powerbox_to_struct(filename0, timezone = TimeZone("Europe/Oslo", TimeZones
 
   top_level_struct_code = esc(quote
                                 struct $(top_level_struct)
-                                  $([Symbol(string_to_struct_safe(x)) for x = keys(sensor_struct_names)]...)
+                                  _powerbox
+                                  $([Symbol(string_to_struct_safe(sensor_names[x])) for x = sensors]...)
                                 end
 
                                 Base.show(io::IO, powerbox::$(top_level_struct)) = print(io, "[PowerBox] $(join(fieldnames(typeof(powerbox)), ", "))")
@@ -218,9 +249,9 @@ macro powerbox_to_struct(filename0, timezone = TimeZone("Europe/Oslo", TimeZones
     :(tmp0[PowerBoxCoreLogs.FieldId($(x.field.sensor), $(x.field.item))].data)
   end
 
-  function make_instance_for_sensor(number, sensor_name)
-    items = Iterators.filter(x -> x.field.name == sensor_name, values(f_d))
-    esc(:( $(Symbol("tmp$(number)")) = $(sensor_struct_names[sensor_name])($([make_field_id(x) for x = items]...)) ))
+  function make_instance_for_sensor(number, sensor)
+    items = make_items(sensor)
+    esc(:( $(Symbol("tmp$(number)")) = $(sensor_struct_names[sensor])($([make_field_id(f_d[FieldId(sensor, i)]) for i = items]...)) ))
   end
 
   quote
@@ -228,7 +259,7 @@ macro powerbox_to_struct(filename0, timezone = TimeZone("Europe/Oslo", TimeZones
     let
       $(esc(:(tmp0 = powerbox_read($(filename0), timezone = $(timezone)))))
       $([make_instance_for_sensor(i, n) for (i, n) = enumerate(sensors)]...)
-      $(esc(:($(top_level_struct))))($([esc(Symbol("tmp$(i)")) for (i, _) = enumerate(sensors)]...))
+      $(esc(:($(top_level_struct))))($(esc(:(tmp0))), $([esc(Symbol("tmp$(i)")) for (i, _) = enumerate(sensors)]...))
     end
   end
 end
