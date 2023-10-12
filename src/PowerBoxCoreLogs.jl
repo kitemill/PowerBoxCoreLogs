@@ -46,15 +46,15 @@ end
 
 function powerbox_read(filename::String; timezone::TimeZone = OSLO, limit::Number = Inf)
   fields_and_data = FieldsWithData()
-  time_seconds_base = 0
+  time_seconds_base::Int64 = 0
 
   function timezone_to_utc_epoch(epoch_oslo_ms)
     tmp = ZonedDateTime(unix2datetime(epoch_oslo_ms .* 0.001), timezone)
-    datetime2unix(DateTime(tmp, UTC)) .* 1_000.0
+    Int64(datetime2unix(DateTime(tmp, UTC)) .* 1_000.0 |> round)
   end
 
   function past_limit()::Bool
-    maximum(vcat(0, [isnothing(x.data) ? 0 : length(x.data.value) for x = values(fields_and_data)])) >= limit
+    maximum(vcat(0, [isnothing(x.data) ? 0 : length(x.data.v) for x = values(fields_and_data)])) >= limit
   end
 
   for next_filename = powerbox_expand_file_series(filename)
@@ -106,17 +106,17 @@ function powerbox_read(filename::String; timezone::TimeZone = OSLO, limit::Numbe
                   f_d = fields_and_data[key]
                   if isnothing(f_d.data)
                     if f_d.field.decimal_digits > 0
-                      f_d = FieldAndData(f_d.field, DataFrame(:epoch_ms => Vector{Int}(), :value => Vector{Float64}()))
+                      f_d = FieldAndData(f_d.field, DataFrame(:_time => Vector{Int64}(), :v => Vector{Float64}()))
                     else
-                      f_d = FieldAndData(f_d.field, DataFrame(:epoch_ms => Vector{Int}(), :value => Vector{Int}()))
+                      f_d = FieldAndData(f_d.field, DataFrame(:_time => Vector{Int64}(), :v => Vector{Int}()))
                     end
                     fields_and_data[key] = f_d
                   end
 
                   if f_d.field.decimal_digits > 0
-                    push!(f_d.data, (timezone_to_utc_epoch(time_seconds_base * 1000 + hundreds * 10), parse(Int, v) * 10.0^-(f_d.field.decimal_digits)))
+                    push!(f_d.data, (timezone_to_utc_epoch(time_seconds_base * 1000 + hundreds * 10), parse(Int64, v) * 10.0^-(f_d.field.decimal_digits)))
                   else
-                    push!(f_d.data, (timezone_to_utc_epoch(time_seconds_base * 1000 + hundreds * 10), parse(Int, v)))
+                    push!(f_d.data, (timezone_to_utc_epoch(time_seconds_base * 1000 + hundreds * 10), parse(Int64, v)))
                   end
                 end
               end
@@ -127,7 +127,7 @@ function powerbox_read(filename::String; timezone::TimeZone = OSLO, limit::Numbe
             if haskey(fields_and_data, key)
               f_d = fields_and_data[key]
               if isnothing(f_d.data)
-                f_d = FieldAndData(f_d.field, DataFrame(:epoch_ms => Vector{Int}(), :value => Vector{String}()))
+                f_d = FieldAndData(f_d.field, DataFrame(:_time => Vector{Int64}(), :v => Vector{String}()))
                 fields_and_data[key] = f_d
               end
               push!(f_d.data, (timezone_to_utc_epoch(time_seconds_base * 1000 + hundreds * 10), fields[6]))
