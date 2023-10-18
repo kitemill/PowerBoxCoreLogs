@@ -1,7 +1,7 @@
 module PowerBoxCoreLogs
 
 export powerbox_read, list, lookup, powerbox_expand_file_series,
-to_dataframe, @powerbox_to_struct
+to_dataframe, @powerbox_to_struct, find00files
 
 
 using DataFrames
@@ -262,6 +262,11 @@ macro powerbox_to_struct(filename0, timezone = TimeZone("Europe/Oslo", TimeZones
       $(esc(:($(top_level_struct))))($(esc(:(tmp0))), $([esc(Symbol("tmp$(i)")) for (i, _) = enumerate(sensors)]...))
     end
   end
+end
+
+
+function find00files(folder)
+  vcat(map(d -> [joinpath(d[1], fn) for fn = [x for x = d[3] if !isnothing(match(r"_00_Tele.log$", x))]], walkdir(folder))...)
 end
 
 
